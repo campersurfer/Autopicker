@@ -120,6 +120,50 @@ def process_text(file_path: Path) -> str:
         logger.error(f"Error processing text file: {e}")
         return f"Error processing text file: {str(e)}"
 
+async def process_audio(file_path: Path) -> Dict[str, Any]:
+    """Process audio file and return transcription"""
+    try:
+        logger.info(f"Processing audio file: {file_path}")
+        
+        # Prepare file for Whisper API
+        async with aiofiles.open(file_path, 'rb') as audio_file:
+            files = {'audio': await audio_file.read()}
+        
+        # Send to Whisper service
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                "http://localhost:9002/asr",
+                files={'audio': files['audio']},
+                params={'output': 'json'}
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                transcription = result.get('text', '').strip()
+                
+                return {
+                    "type": "audio",
+                    "transcription": transcription,
+                    "language": result.get('language', 'unknown'),
+                    "duration": result.get('duration', 0),
+                    "content": transcription  # For compatibility with text processing
+                }
+            else:
+                logger.error(f"Whisper API error: {response.status_code} - {response.text}")
+                return {
+                    "type": "audio", 
+                    "error": f"Transcription failed: {response.status_code}",
+                    "fallback": f"Audio file ({file_path.suffix}) uploaded but transcription unavailable"
+                }
+                
+    except Exception as e:
+        logger.error(f"Error processing audio: {e}")
+        return {
+            "type": "audio", 
+            "error": str(e),
+            "fallback": f"Audio file ({file_path.suffix}) uploaded but processing failed"
+        }
+
 def get_file_content(file_path: Path) -> Dict[str, Any]:
     """Process any supported file type"""
     suffix = file_path.suffix.lower()
@@ -136,6 +180,9 @@ def get_file_content(file_path: Path) -> Dict[str, Any]:
     elif suffix in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']:
         content = process_image(file_path)
         return content
+    elif suffix in ['.mp3', '.wav', '.m4a', '.ogg', '.flac']:
+        # Audio files need async processing, return placeholder for now
+        return {"type": "audio", "content": "Audio file uploaded, use transcription endpoint"}
     elif suffix in ['.txt', '.md', '.csv', '.json', '.py', '.js', '.html', '.css']:
         content = process_text(file_path)
         return {"type": "text", "content": content}
@@ -364,6 +411,162 @@ async def multimodal_chat(request: MultimodalRequest):
         logger.error(f"Unexpected error in multimodal chat: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# Audio transcription endpoint
+@app.post("/api/v1/transcribe/{file_id}")
+async def transcribe_audio(file_id: str):
+    """Transcribe an uploaded audio file"""
+    try:
+        # Find the audio file
+        audio_file_path = None
+        for file_path in UPLOAD_DIR.iterdir():
+            if file_path.stem == file_id:
+                # Check if it's an audio file
+                if file_path.suffix.lower() in ['.mp3', '.wav', '.m4a', '.ogg', '.flac']:
+                    audio_file_path = file_path
+                    break
+                else:
+                    raise HTTPException(status_code=400, detail=f"File {file_id} is not an audio file")
+        
+        if not audio_file_path:
+            raise HTTPException(status_code=404, detail=f"Audio file {file_id} not found")
+        
+        # Process the audio file
+        result = await process_audio(audio_file_path)
+        
+        if "error" in result:
+            raise HTTPException(status_code=500, detail=result["error"])
+        
+        logger.info(f"Successfully transcribed audio file: {audio_file_path.name}")
+        return {
+            "file_id": file_id,
+            "filename": audio_file_path.name,
+            "transcription": result.get("transcription", ""),
+            "language": result.get("language", "unknown"),
+            "duration": result.get("duration", 0),
+            "type": "audio"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Transcription error: {e}")
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+
+# Enhanced multimodal chat that can handle audio transcription
+@app.post("/api/v1/chat/multimodal-audio")
+async def multimodal_audio_chat(request: MultimodalRequest):
+    """Chat completion with file support including audio transcription"""
+    try:
+        # Build the context with file contents
+        context_messages = []
+        
+        # Add file contents to context if provided
+        if request.file_ids:
+            file_context = "=== Attached Files ===\n"
+            for file_id in request.file_ids:
+                # Find the file
+                file_found = False
+                for file_path in UPLOAD_DIR.iterdir():
+                    if file_path.stem == file_id:
+                        file_type = file_path.suffix.lower()
+                        
+                        # Handle audio files with transcription
+                        if file_type in ['.mp3', '.wav', '.m4a', '.ogg', '.flac']:
+                            logger.info(f"Processing audio file for chat: {file_path.name}")
+                            audio_result = await process_audio(file_path)
+                            
+                            if "error" in audio_result:
+                                file_context += f"\nFile: {file_path.name}\nType: Audio\nNote: {audio_result.get('fallback', 'Audio processing failed')}\n\n"
+                            else:
+                                transcription = audio_result.get("transcription", "")
+                                language = audio_result.get("language", "unknown")
+                                file_context += f"\nFile: {file_path.name}\nType: Audio Transcription\nLanguage: {language}\nContent:\n{transcription}\n\n"
+                        else:
+                            # Handle other file types normally
+                            file_content = get_file_content(file_path)
+                            file_type_name = file_content.get("type", "unknown")
+                            
+                            if file_type_name in ["pdf", "docx", "text", "excel"]:
+                                file_context += f"\nFile: {file_path.name}\nType: {file_type_name}\nContent:\n{file_content.get('content', 'No content available')}\n\n"
+                            elif file_type_name == "image":
+                                file_context += f"\nFile: {file_path.name}\nType: Image\nDescription: {file_content.get('description', 'Image file')}\n\n"
+                            else:
+                                file_context += f"\nFile: {file_path.name}\nType: {file_type_name}\nNote: This file type is not fully processed but was uploaded successfully.\n\n"
+                        
+                        file_found = True
+                        break
+                
+                if not file_found:
+                    file_context += f"\nFile ID {file_id} not found.\n"
+            
+            # Add file context as a system message
+            context_messages.append({
+                "role": "system", 
+                "content": f"You are analyzing the following files. Use this information to answer the user's questions:\n\n{file_context}"
+            })
+        
+        # Add the user's messages
+        for msg in request.messages:
+            context_messages.append({"role": msg.role, "content": msg.content})
+        
+        # Convert to Ollama format
+        payload = {
+            "model": "llama3.2:1b",
+            "messages": context_messages,
+            "stream": False
+        }
+        
+        logger.info(f"Sending multimodal-audio request to Ollama with {len(request.file_ids)} files")
+        
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                "http://localhost:11434/api/chat",
+                json=payload
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"Ollama error: {response.status_code} - {response.text}")
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Ollama error: {response.text}"
+                )
+            
+            result = response.json()
+            
+            # Convert Ollama response to OpenAI format
+            openai_response = {
+                "id": str(uuid.uuid4()),
+                "object": "chat.completion",
+                "model": request.model,
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": result.get("message", {}).get("content", "")
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": result.get("prompt_eval_count", 0),
+                    "completion_tokens": result.get("eval_count", 0),
+                    "total_tokens": result.get("prompt_eval_count", 0) + result.get("eval_count", 0)
+                },
+                "files_processed": len(request.file_ids) if request.file_ids else 0
+            }
+            
+            logger.info(f"Successfully processed multimodal-audio request with {len(request.file_ids)} files")
+            return openai_response
+            
+    except httpx.RequestError as e:
+        logger.error(f"Request error: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Ollama is not available. Please ensure it's running."
+        )
+    except Exception as e:
+        logger.error(f"Unexpected error in multimodal-audio chat: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # File upload
 @app.post("/api/v1/upload", response_model=FileUploadResponse)
 async def upload_file(file: UploadFile = File(...)):
@@ -490,6 +693,8 @@ async def root():
             "test_ollama": "/test-ollama",
             "chat": "/api/v1/chat/completions",
             "multimodal_chat": "/api/v1/chat/multimodal",
+            "multimodal_audio_chat": "/api/v1/chat/multimodal-audio",
+            "transcribe": "/api/v1/transcribe/{file_id}",
             "upload": "/api/v1/upload",
             "files": "/api/v1/files",
             "models": "/api/v1/models"
@@ -498,6 +703,7 @@ async def root():
             "documents": ["pdf", "docx", "txt", "md"],
             "spreadsheets": ["xlsx", "xls", "csv"],
             "images": ["jpg", "jpeg", "png", "gif", "bmp", "webp"],
+            "audio": ["mp3", "wav", "m4a", "ogg", "flac"],
             "code": ["py", "js", "html", "css", "json"]
         },
         "docs": "/docs",

@@ -1,4 +1,4 @@
-version: '3.8'
+version: '3.3'
 
 services:
   postgres:
@@ -71,7 +71,7 @@ services:
     image: onerahmet/openai-whisper-asr-webservice:latest
     container_name: multimodal-whisper
     ports:
-      - "9000:9000"
+      - "9002:9000"
     environment:
       - ASR_MODEL=base
       - ASR_ENGINE=openai_whisper
@@ -88,4 +88,3 @@ volumes:
 
 networks:
   default:
-    name: multimodal-network
