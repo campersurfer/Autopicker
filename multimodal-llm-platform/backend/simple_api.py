@@ -212,9 +212,99 @@ class FileUploadResponse(BaseModel):
 class MultimodalRequest(BaseModel):
     messages: List[ChatMessage]
     file_ids: Optional[List[str]] = []
-    model: Optional[str] = "llama3.2-local"
+    model: Optional[str] = "auto"  # Changed default to "auto" for smart routing
     temperature: Optional[float] = 0.7
     max_tokens: Optional[int] = None
+
+class ModelSelector:
+    """Smart routing logic for model selection based on request complexity"""
+    
+    def __init__(self):
+        # Available models and their capabilities
+        self.models = {
+            "llama3.2:1b": {
+                "type": "text",
+                "max_context": 2048,
+                "complexity_score": 1,
+                "best_for": ["simple_text", "basic_chat", "small_files"]
+            }
+            # We can add more models here as we deploy them
+        }
+    
+    def calculate_complexity_score(self, request: MultimodalRequest, file_info: List[Dict] = None) -> float:
+        """Calculate complexity score for the request"""
+        complexity_score = 0.0
+        
+        # Message complexity
+        total_message_length = sum(len(msg.content) for msg in request.messages)
+        if total_message_length > 2000:
+            complexity_score += 30
+        elif total_message_length > 500:
+            complexity_score += 15
+        
+        # File complexity
+        if file_info:
+            for file_data in file_info:
+                file_type = file_data.get("type", "unknown")
+                
+                if file_type == "pdf":
+                    complexity_score += 25  # PDFs can be complex
+                elif file_type == "excel":
+                    complexity_score += 20  # Excel files often have complex data
+                elif file_type == "audio":
+                    complexity_score += 30  # Audio transcription adds complexity
+                elif file_type == "image":
+                    complexity_score += 35  # Images require vision capabilities
+                elif file_type in ["docx", "text"]:
+                    complexity_score += 10  # Text files are simpler
+                
+                # File size factor
+                file_size = file_data.get("size", 0)
+                if file_size > 1000000:  # > 1MB
+                    complexity_score += 20
+                elif file_size > 100000:  # > 100KB
+                    complexity_score += 10
+        
+        # Multiple files increase complexity
+        if file_info and len(file_info) > 1:
+            complexity_score += len(file_info) * 5
+        
+        # Request type complexity
+        if request.file_ids and len(request.file_ids) > 0:
+            complexity_score += 15  # Multimodal requests are more complex
+        
+        return min(complexity_score, 100.0)  # Cap at 100
+    
+    def select_model(self, request: MultimodalRequest, file_info: List[Dict] = None) -> str:
+        """Select the best model for the given request"""
+        
+        # If user explicitly specified a model (not "auto"), use it
+        if request.model and request.model != "auto":
+            if request.model == "llama3.2-local":
+                return "llama3.2:1b"
+            return request.model
+        
+        # Calculate complexity
+        complexity_score = self.calculate_complexity_score(request, file_info)
+        
+        # For now, we only have one model, but this logic can be extended
+        # When we add more models, we can route based on complexity:
+        
+        # if complexity_score < 30:
+        #     return "llama3.2:1b"  # Simple requests
+        # elif complexity_score < 60:
+        #     return "llama3.2:3b"  # Medium complexity
+        # else:
+        #     return "gpt-4"  # Complex requests (external API)
+        
+        # For now, always return our available model
+        selected_model = "llama3.2:1b"
+        
+        logger.info(f"Smart routing: complexity_score={complexity_score:.1f}, selected_model={selected_model}")
+        return selected_model
+
+# Initialize model selector
+model_selector = ModelSelector()
 
 # Health check endpoint
 @app.get("/health")
@@ -319,6 +409,9 @@ async def multimodal_chat(request: MultimodalRequest):
         # Build the context with file contents
         context_messages = []
         
+        # Collect file information for smart routing
+        file_info = []
+        
         # Add file contents to context if provided
         if request.file_ids:
             file_context = "=== Attached Files ===\n"
@@ -329,6 +422,13 @@ async def multimodal_chat(request: MultimodalRequest):
                     if file_path.stem == file_id:
                         file_content = get_file_content(file_path)
                         file_type = file_content.get("type", "unknown")
+                        
+                        # Collect file info for routing
+                        file_info.append({
+                            "type": file_type,
+                            "size": file_path.stat().st_size,
+                            "name": file_path.name
+                        })
                         
                         if file_type in ["pdf", "docx", "text", "excel"]:
                             file_context += f"\nFile: {file_path.name}\nType: {file_type}\nContent:\n{file_content.get('content', 'No content available')}\n\n"
@@ -353,14 +453,17 @@ async def multimodal_chat(request: MultimodalRequest):
         for msg in request.messages:
             context_messages.append({"role": msg.role, "content": msg.content})
         
+        # Smart model selection
+        selected_model = model_selector.select_model(request, file_info)
+        
         # Convert to Ollama format
         payload = {
-            "model": "llama3.2:1b",
+            "model": selected_model,
             "messages": context_messages,
             "stream": False
         }
         
-        logger.info(f"Sending multimodal request to Ollama with {len(request.file_ids)} files")
+        logger.info(f"Sending multimodal request to Ollama with {len(request.file_ids)} files using model {selected_model}")
         
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
@@ -473,6 +576,14 @@ async def multimodal_audio_chat(request: MultimodalRequest):
                         # Handle audio files with transcription
                         if file_type in ['.mp3', '.wav', '.m4a', '.ogg', '.flac']:
                             logger.info(f"Processing audio file for chat: {file_path.name}")
+                            
+                            # Collect file info for routing
+                            file_info.append({
+                                "type": "audio",
+                                "size": file_path.stat().st_size,
+                                "name": file_path.name
+                            })
+                            
                             audio_result = await process_audio(file_path)
                             
                             if "error" in audio_result:
@@ -482,8 +593,15 @@ async def multimodal_audio_chat(request: MultimodalRequest):
                                 language = audio_result.get("language", "unknown")
                                 file_context += f"\nFile: {file_path.name}\nType: Audio Transcription\nLanguage: {language}\nContent:\n{transcription}\n\n"
                         else:
-                            # Handle other file types normally
+                            # Collect file info for routing
                             file_content = get_file_content(file_path)
+                            file_info.append({
+                                "type": file_content.get("type", "unknown"),
+                                "size": file_path.stat().st_size,
+                                "name": file_path.name
+                            })
+                            
+                            # Handle other file types normally
                             file_type_name = file_content.get("type", "unknown")
                             
                             if file_type_name in ["pdf", "docx", "text", "excel"]:
@@ -509,14 +627,17 @@ async def multimodal_audio_chat(request: MultimodalRequest):
         for msg in request.messages:
             context_messages.append({"role": msg.role, "content": msg.content})
         
+        # Smart model selection
+        selected_model = model_selector.select_model(request, file_info)
+        
         # Convert to Ollama format
         payload = {
-            "model": "llama3.2:1b",
+            "model": selected_model,
             "messages": context_messages,
             "stream": False
         }
         
-        logger.info(f"Sending multimodal-audio request to Ollama with {len(request.file_ids)} files")
+        logger.info(f"Sending multimodal-audio request to Ollama with {len(request.file_ids)} files using model {selected_model}")
         
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
@@ -565,6 +686,65 @@ async def multimodal_audio_chat(request: MultimodalRequest):
         )
     except Exception as e:
         logger.error(f"Unexpected error in multimodal-audio chat: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Smart routing analysis endpoint
+@app.post("/api/v1/analyze-complexity")
+async def analyze_complexity(request: MultimodalRequest):
+    """Analyze request complexity and show model routing decision"""
+    try:
+        # Collect file information
+        file_info = []
+        
+        if request.file_ids:
+            for file_id in request.file_ids:
+                for file_path in UPLOAD_DIR.iterdir():
+                    if file_path.stem == file_id:
+                        if file_path.suffix.lower() in ['.mp3', '.wav', '.m4a', '.ogg', '.flac']:
+                            file_info.append({
+                                "type": "audio",
+                                "size": file_path.stat().st_size,
+                                "name": file_path.name
+                            })
+                        else:
+                            file_content = get_file_content(file_path)
+                            file_info.append({
+                                "type": file_content.get("type", "unknown"),
+                                "size": file_path.stat().st_size,
+                                "name": file_path.name
+                            })
+                        break
+        
+        # Calculate complexity
+        complexity_score = model_selector.calculate_complexity_score(request, file_info)
+        selected_model = model_selector.select_model(request, file_info)
+        
+        # Message analysis
+        total_message_length = sum(len(msg.content) for msg in request.messages)
+        
+        return {
+            "complexity_analysis": {
+                "complexity_score": complexity_score,
+                "selected_model": selected_model,
+                "reasoning": {
+                    "total_message_length": total_message_length,
+                    "file_count": len(file_info),
+                    "file_types": [f["type"] for f in file_info],
+                    "total_file_size": sum(f["size"] for f in file_info),
+                    "has_multimodal_content": len(file_info) > 0,
+                    "complexity_factors": {
+                        "message_complexity": "high" if total_message_length > 2000 else "medium" if total_message_length > 500 else "low",
+                        "file_complexity": "high" if any(f["type"] in ["audio", "image"] for f in file_info) else "medium" if any(f["type"] in ["pdf", "excel"] for f in file_info) else "low" if file_info else "none",
+                        "size_complexity": "high" if any(f["size"] > 1000000 for f in file_info) else "medium" if any(f["size"] > 100000 for f in file_info) else "low"
+                    }
+                }
+            },
+            "available_models": model_selector.models,
+            "routing_logic": "Complexity-based model selection with file type and size analysis"
+        }
+        
+    except Exception as e:
+        logger.error(f"Complexity analysis error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # File upload
@@ -695,9 +875,16 @@ async def root():
             "multimodal_chat": "/api/v1/chat/multimodal",
             "multimodal_audio_chat": "/api/v1/chat/multimodal-audio",
             "transcribe": "/api/v1/transcribe/{file_id}",
+            "analyze_complexity": "/api/v1/analyze-complexity",
             "upload": "/api/v1/upload",
             "files": "/api/v1/files",
             "models": "/api/v1/models"
+        },
+        "smart_routing": {
+            "enabled": True,
+            "default_model": "auto",
+            "complexity_factors": ["message_length", "file_types", "file_sizes", "multimodal_content"],
+            "routing_logic": "Automatic model selection based on request complexity"
         },
         "supported_file_types": {
             "documents": ["pdf", "docx", "txt", "md"],
