@@ -10,7 +10,7 @@ VPS_HOST="${VPS_HOST:-38.242.229.78}"
 VPS_USER="${VPS_USER:-julie}"
 VPS_PATH="${VPS_PATH:-/home/julie/Autopicker}"
 PROJECT_NAME="autopicker"
-GITHUB_REPO="https://github.com/juliebush/Autopicker.git"  # TODO: Update with your actual repo URL
+GITHUB_REPO="https://github.com/campersurfer/Autopicker.git"
 
 # Colors for output
 RED='\033[0;31m'
@@ -77,7 +77,7 @@ if [ -d "$PROJECT_PATH" ]; then
     git clean -fd
 else
     echo "Cloning repository..."
-    git clone https://github.com/juliebush/Autopicker.git "$PROJECT_PATH"
+    git clone https://github.com/campersurfer/Autopicker.git "$PROJECT_PATH"
     cd "$PROJECT_PATH"
 fi
 
