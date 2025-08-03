@@ -6,8 +6,9 @@ Minimal version with just essential functionality
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, AsyncGenerator
 import httpx
 import json
 import os
@@ -20,6 +21,7 @@ from PIL import Image
 import PyPDF2
 from docx import Document
 import openpyxl
+import asyncio
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -199,6 +201,7 @@ class ChatCompletionRequest(BaseModel):
     model: Optional[str] = "llama3.2-local"
     temperature: Optional[float] = 0.7
     max_tokens: Optional[int] = None
+    stream: Optional[bool] = False
 
 class FileUploadResponse(BaseModel):
     id: str
@@ -215,6 +218,7 @@ class MultimodalRequest(BaseModel):
     model: Optional[str] = "auto"  # Changed default to "auto" for smart routing
     temperature: Optional[float] = 0.7
     max_tokens: Optional[int] = None
+    stream: Optional[bool] = False
 
 class ModelSelector:
     """Smart routing logic for model selection based on request complexity"""
@@ -306,6 +310,69 @@ class ModelSelector:
 # Initialize model selector
 model_selector = ModelSelector()
 
+# Streaming helper functions
+async def stream_ollama_response(payload: Dict[str, Any]) -> AsyncGenerator[str, None]:
+    """Stream response from Ollama API"""
+    try:
+        # Add streaming to payload
+        payload["stream"] = True
+        
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream("POST", "http://localhost:11434/api/chat", json=payload) as response:
+                if response.status_code != 200:
+                    logger.error(f"Ollama streaming error: {response.status_code}")
+                    yield f"data: {json.dumps({'error': f'Ollama error: {response.status_code}'})}\n\n"
+                    return
+                
+                async for chunk in response.aiter_text():
+                    if chunk.strip():
+                        try:
+                            # Parse each JSON line from Ollama
+                            for line in chunk.strip().split('\n'):
+                                if line:
+                                    ollama_response = json.loads(line)
+                                    
+                                    # Convert Ollama streaming format to OpenAI format
+                                    if "message" in ollama_response and "content" in ollama_response["message"]:
+                                        content = ollama_response["message"]["content"]
+                                        
+                                        openai_chunk = {
+                                            "id": str(uuid.uuid4()),
+                                            "object": "chat.completion.chunk",
+                                            "model": payload.get("model", "llama3.2:1b"),
+                                            "choices": [{
+                                                "index": 0,
+                                                "delta": {"content": content},
+                                                "finish_reason": None
+                                            }]
+                                        }
+                                        
+                                        yield f"data: {json.dumps(openai_chunk)}\n\n"
+                                    
+                                    # Check if this is the final chunk
+                                    if ollama_response.get("done", False):
+                                        final_chunk = {
+                                            "id": str(uuid.uuid4()),
+                                            "object": "chat.completion.chunk",
+                                            "model": payload.get("model", "llama3.2:1b"),
+                                            "choices": [{
+                                                "index": 0,
+                                                "delta": {},
+                                                "finish_reason": "stop"
+                                            }]
+                                        }
+                                        yield f"data: {json.dumps(final_chunk)}\n\n"
+                                        yield "data: [DONE]\n\n"
+                                        return
+                                        
+                        except json.JSONDecodeError as e:
+                            logger.error(f"JSON decode error in streaming: {e}")
+                            continue
+                            
+    except Exception as e:
+        logger.error(f"Streaming error: {e}")
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
 # Health check endpoint
 @app.get("/health")
 async def health_check():
@@ -348,8 +415,21 @@ async def chat_completion(request: ChatCompletionRequest):
         payload = {
             "model": "llama3.2:1b",  # Use the actual model name
             "messages": [{"role": msg.role, "content": msg.content} for msg in request.messages],
-            "stream": False
+            "stream": request.stream
         }
+        
+        # Return streaming response if requested
+        if request.stream:
+            logger.info(f"Streaming chat completion request: {request.model}")
+            return StreamingResponse(
+                stream_ollama_response(payload),
+                media_type="text/plain",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Content-Type": "text/plain; charset=utf-8"
+                }
+            )
         
         logger.info(f"Sending request to Ollama: {request.model}")
         
@@ -460,8 +540,21 @@ async def multimodal_chat(request: MultimodalRequest):
         payload = {
             "model": selected_model,
             "messages": context_messages,
-            "stream": False
+            "stream": request.stream
         }
+        
+        # Return streaming response if requested
+        if request.stream:
+            logger.info(f"Streaming multimodal request to Ollama with {len(request.file_ids)} files using model {selected_model}")
+            return StreamingResponse(
+                stream_ollama_response(payload),
+                media_type="text/plain",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Content-Type": "text/plain; charset=utf-8"
+                }
+            )
         
         logger.info(f"Sending multimodal request to Ollama with {len(request.file_ids)} files using model {selected_model}")
         
@@ -563,6 +656,9 @@ async def multimodal_audio_chat(request: MultimodalRequest):
         # Build the context with file contents
         context_messages = []
         
+        # Collect file information for smart routing
+        file_info = []
+        
         # Add file contents to context if provided
         if request.file_ids:
             file_context = "=== Attached Files ===\n"
@@ -634,8 +730,21 @@ async def multimodal_audio_chat(request: MultimodalRequest):
         payload = {
             "model": selected_model,
             "messages": context_messages,
-            "stream": False
+            "stream": request.stream
         }
+        
+        # Return streaming response if requested
+        if request.stream:
+            logger.info(f"Streaming multimodal-audio request to Ollama with {len(request.file_ids)} files using model {selected_model}")
+            return StreamingResponse(
+                stream_ollama_response(payload),
+                media_type="text/plain",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Content-Type": "text/plain; charset=utf-8"
+                }
+            )
         
         logger.info(f"Sending multimodal-audio request to Ollama with {len(request.file_ids)} files using model {selected_model}")
         
@@ -885,6 +994,11 @@ async def root():
             "default_model": "auto",
             "complexity_factors": ["message_length", "file_types", "file_sizes", "multimodal_content"],
             "routing_logic": "Automatic model selection based on request complexity"
+        },
+        "streaming": {
+            "enabled": True,
+            "description": "Real-time streaming responses supported",
+            "parameter": "Set 'stream': true in request body"
         },
         "supported_file_types": {
             "documents": ["pdf", "docx", "txt", "md"],
