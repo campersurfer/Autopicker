@@ -1,0 +1,21 @@
+# Essential packages only for VPS deployment
+fastapi>=0.115.5
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.18
+httpx>=0.28.0
+aiofiles>=24.0.0
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+
+# File processing
+PyPDF2>=3.0.0
+python-docx>=1.1.0
+Pillow>=10.0.0
+openpyxl>=3.1.0
+
+# Database (optional for basic functionality)
+asyncpg>=0.30.0
+redis>=5.0.0
+
+# Basic development tools
+pytest>=8.0.0

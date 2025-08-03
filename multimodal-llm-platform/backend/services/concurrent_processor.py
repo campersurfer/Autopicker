@@ -2,8 +2,8 @@ import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 from pathlib import Path
-from .search_service import SearchService, SearchResult
-from ..processors.file_processor import FileProcessor
+from services.search_service import SearchService, SearchResult
+from processors.file_processor import FileProcessor
 
 logger = logging.getLogger(__name__)
 
