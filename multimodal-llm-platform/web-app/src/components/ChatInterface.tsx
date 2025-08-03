@@ -4,13 +4,16 @@ import { useState, useRef, useEffect } from 'react'
 import { PaperAirplaneIcon, PlusIcon, XMarkIcon } from '@heroicons/react/24/outline'
 import { FileUpload } from './FileUpload'
 import { MessageBubble } from './MessageBubble'
+import { StreamingMessage } from './StreamingMessage'
 import { useChatMutation } from '@/hooks/useChatMutation'
+import { useStreamingChat } from '@/hooks/useStreamingChat'
 
 interface Message {
   id: string
   role: 'user' | 'assistant'
   content: string
   timestamp: Date
+  isStreaming?: boolean
 }
 
 interface AttachedFile {
@@ -29,6 +32,8 @@ export function ChatInterface() {
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
   const chatMutation = useChatMutation()
+  const { streamChat, isStreaming, error: streamError } = useStreamingChat()
+  const [useStreaming, setUseStreaming] = useState(true) // Default to streaming
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -48,36 +53,93 @@ export function ChatInterface() {
       timestamp: new Date(),
     }
 
+    const currentInput = input.trim()
     setMessages(prev => [...prev, userMessage])
     setInput('')
 
-    try {
-      const response = await chatMutation.mutateAsync({
-        messages: [
-          ...messages.map(m => ({ role: m.role, content: m.content })),
-          { role: 'user', content: input.trim() }
-        ],
-        fileIds: attachedFiles.map(f => f.id),
-        model: 'auto', // Use smart routing
-      })
-
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
+    const assistantMessageId = (Date.now() + 1).toString()
+    
+    if (useStreaming) {
+      // Streaming response
+      const streamingMessage: Message = {
+        id: assistantMessageId,
         role: 'assistant',
-        content: response.choices[0]?.message?.content || 'No response received',
+        content: '',
         timestamp: new Date(),
+        isStreaming: true,
       }
 
-      setMessages(prev => [...prev, assistantMessage])
-    } catch (error) {
-      console.error('Chat error:', error)
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: 'Sorry, there was an error processing your message. Please try again.',
-        timestamp: new Date(),
+      setMessages(prev => [...prev, streamingMessage])
+
+      try {
+        await streamChat(
+          {
+            messages: [
+              ...messages.map(m => ({ role: m.role, content: m.content })),
+              { role: 'user', content: currentInput }
+            ],
+            fileIds: attachedFiles.map(f => f.id),
+            model: 'auto',
+          },
+          (chunk: string) => {
+            // Update the streaming message with new content
+            setMessages(prev => prev.map(msg => 
+              msg.id === assistantMessageId 
+                ? { ...msg, content: msg.content + chunk }
+                : msg
+            ))
+          },
+          () => {
+            // Mark streaming as complete
+            setMessages(prev => prev.map(msg => 
+              msg.id === assistantMessageId 
+                ? { ...msg, isStreaming: false }
+                : msg
+            ))
+          }
+        )
+      } catch (error) {
+        console.error('Streaming error:', error)
+        setMessages(prev => prev.map(msg => 
+          msg.id === assistantMessageId 
+            ? { 
+                ...msg, 
+                content: streamError || 'Sorry, there was an error processing your message. Please try again.',
+                isStreaming: false 
+              }
+            : msg
+        ))
       }
-      setMessages(prev => [...prev, errorMessage])
+    } else {
+      // Non-streaming response (fallback)
+      try {
+        const response = await chatMutation.mutateAsync({
+          messages: [
+            ...messages.map(m => ({ role: m.role, content: m.content })),
+            { role: 'user', content: currentInput }
+          ],
+          fileIds: attachedFiles.map(f => f.id),
+          model: 'auto',
+        })
+
+        const assistantMessage: Message = {
+          id: assistantMessageId,
+          role: 'assistant',
+          content: response.choices[0]?.message?.content || 'No response received',
+          timestamp: new Date(),
+        }
+
+        setMessages(prev => [...prev, assistantMessage])
+      } catch (error) {
+        console.error('Chat error:', error)
+        const errorMessage: Message = {
+          id: assistantMessageId,
+          role: 'assistant',
+          content: 'Sorry, there was an error processing your message. Please try again.',
+          timestamp: new Date(),
+        }
+        setMessages(prev => [...prev, errorMessage])
+      }
     }
   }
 
@@ -134,7 +196,16 @@ export function ChatInterface() {
           </div>
         ) : (
           messages.map((message) => (
-            <MessageBubble key={message.id} message={message} />
+            message.role === 'assistant' && message.isStreaming ? (
+              <StreamingMessage 
+                key={message.id} 
+                content={message.content}
+                isStreaming={message.isStreaming}
+                timestamp={message.timestamp}
+              />
+            ) : (
+              <MessageBubble key={message.id} message={message} />
+            )
           ))
         )}
         <div ref={messagesEndRef} />
@@ -197,12 +268,24 @@ export function ChatInterface() {
           </button>
           
           <button
+            onClick={() => setUseStreaming(!useStreaming)}
+            className={`p-2 text-xs rounded-md transition-colors ${
+              useStreaming 
+                ? 'bg-green-100 text-green-700 hover:bg-green-200' 
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+            title={useStreaming ? 'Streaming enabled' : 'Streaming disabled'}
+          >
+            {useStreaming ? '⚡ Stream' : '💬 Normal'}
+          </button>
+          
+          <button
             onClick={handleSendMessage}
-            disabled={chatMutation.isPending || (!input.trim() && attachedFiles.length === 0)}
+            disabled={chatMutation.isPending || isStreaming || (!input.trim() && attachedFiles.length === 0)}
             className="p-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             title="Send message"
           >
-            {chatMutation.isPending ? (
+            {chatMutation.isPending || isStreaming ? (
               <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
             ) : (
               <PaperAirplaneIcon className="w-5 h-5" />
