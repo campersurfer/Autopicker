@@ -2,12 +2,13 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { ChartBarIcon, ChatBubbleLeftRightIcon, DocumentTextIcon, Cog6ToothIcon } from '@heroicons/react/24/outline'
+import { ChartBarIcon, ChatBubbleLeftRightIcon, DocumentTextIcon, Cog6ToothIcon, ComputerDesktopIcon } from '@heroicons/react/24/outline'
 
 const navigation = [
   { name: 'Chat', href: '/', icon: ChatBubbleLeftRightIcon },
   { name: 'Files', href: '/files', icon: DocumentTextIcon },
   { name: 'Analytics', href: '/analytics', icon: ChartBarIcon },
+  { name: 'Monitoring', href: '/monitoring', icon: ComputerDesktopIcon },
   { name: 'Settings', href: '/settings', icon: Cog6ToothIcon },
 ]
 

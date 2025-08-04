@@ -1,0 +1,656 @@
+openapi: 3.0.3
+info:
+  title: Autopicker Multimodal LLM Platform API
+  description: |
+    A comprehensive multimodal AI platform that processes text, images, audio, and documents 
+    using intelligent model routing and OpenAI-compatible endpoints.
+    
+    ## Features
+    - **OpenAI-Compatible**: Drop-in replacement for OpenAI API
+    - **Multimodal Processing**: Handle PDFs, DOCX, images, audio files
+    - **Smart Routing**: Automatic model selection based on complexity
+    - **Streaming Support**: Real-time response streaming
+    - **Production Ready**: Security, monitoring, and performance optimization
+    
+    ## Authentication
+    API key authentication is available for enhanced security. Contact your administrator for API keys.
+    
+    ## Rate Limits
+    - 100 requests per minute per IP address
+    - File uploads limited to 10MB per file
+    
+    ## Base URL
+    Production: `http://38.242.229.78:8001`
+  version: 1.0.0
+  contact:
+    name: Autopicker Support
+    url: http://38.242.229.78:8001/docs
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://38.242.229.78:8001
+    description: Production server
+  - url: http://localhost:8001
+    description: Local development server
+
+paths:
+  /health:
+    get:
+      summary: Health Check
+      description: Check if the API service is running and healthy
+      tags:
+        - System
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+                  service:
+                    type: string
+                    example: multimodal-llm-platform-simple
+
+  /api/v1/models:
+    get:
+      summary: List Available Models
+      description: Get a list of available AI models
+      tags:
+        - Models
+      responses:
+        '200':
+          description: List of available models
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  object:
+                    type: string
+                    example: list
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          example: llama3.2:1b
+                        object:
+                          type: string
+                          example: model
+                        created:
+                          type: integer
+                          example: 0
+                        owned_by:
+                          type: string
+                          example: local-ollama
+
+  /api/v1/chat/completions:
+    post:
+      summary: Chat Completion
+      description: |
+        Create a chat completion using OpenAI-compatible format.
+        Supports both streaming and non-streaming responses.
+      tags:
+        - Chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - messages
+              properties:
+                messages:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      role:
+                        type: string
+                        enum: [user, assistant, system]
+                        example: user
+                      content:
+                        type: string
+                        example: Hello, how are you?
+                model:
+                  type: string
+                  example: llama3.2-local
+                  description: Model to use (optional, auto-selected if not provided)
+                temperature:
+                  type: number
+                  minimum: 0
+                  maximum: 2
+                  default: 0.7
+                  example: 0.7
+                max_tokens:
+                  type: integer
+                  minimum: 1
+                  example: 150
+                stream:
+                  type: boolean
+                  default: false
+                  example: false
+      responses:
+        '200':
+          description: Chat completion response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    example: chatcmpl-123
+                  object:
+                    type: string
+                    example: chat.completion
+                  model:
+                    type: string
+                    example: llama3.2-local
+                  choices:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        index:
+                          type: integer
+                          example: 0
+                        message:
+                          type: object
+                          properties:
+                            role:
+                              type: string
+                              example: assistant
+                            content:
+                              type: string
+                              example: Hello! I'm doing well, thank you for asking.
+                        finish_reason:
+                          type: string
+                          example: stop
+                  usage:
+                    type: object
+                    properties:
+                      prompt_tokens:
+                        type: integer
+                        example: 10
+                      completion_tokens:
+                        type: integer
+                        example: 15
+                      total_tokens:
+                        type: integer
+                        example: 25
+        '400':
+          description: Bad request
+        '429':
+          description: Rate limit exceeded
+        '500':
+          description: Internal server error
+
+  /api/v1/upload:
+    post:
+      summary: Upload File
+      description: |
+        Upload a file for processing. Supports various file types including:
+        - Documents: PDF, DOCX, TXT, MD
+        - Spreadsheets: XLSX, XLS, CSV
+        - Images: JPG, PNG, GIF, BMP, WEBP
+        - Audio: MP3, WAV, M4A, OGG, FLAC
+        - Code: PY, JS, HTML, CSS, JSON
+      tags:
+        - Files
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: File to upload (max 10MB)
+      responses:
+        '200':
+          description: File uploaded successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    example: 550e8400-e29b-41d4-a716-446655440000
+                  filename:
+                    type: string
+                    example: document.pdf
+                  original_filename:
+                    type: string
+                    example: my-document.pdf
+                  size:
+                    type: integer
+                    example: 1024000
+                  mime_type:
+                    type: string
+                    example: application/pdf
+                  content_preview:
+                    type: string
+                    example: This is the beginning of the document content...
+                  file_type:
+                    type: string
+                    example: pdf
+        '400':
+          description: Invalid file or file too large
+        '413':
+          description: File too large
+
+  /api/v1/files:
+    get:
+      summary: List Uploaded Files
+      description: Get a list of all uploaded files
+      tags:
+        - Files
+      responses:
+        '200':
+          description: List of uploaded files
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        filename:
+                          type: string
+                          example: document.pdf
+                        size:
+                          type: integer
+                          example: 1024000
+                        created_at:
+                          type: number
+                          example: 1641024000
+                        path:
+                          type: string
+                          example: /uploads/document.pdf
+                  count:
+                    type: integer
+                    example: 5
+
+  /api/v1/chat/multimodal:
+    post:
+      summary: Multimodal Chat Completion
+      description: |
+        Create a chat completion with file attachments. The AI can analyze
+        uploaded files as part of the conversation context.
+      tags:
+        - Chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - messages
+              properties:
+                messages:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      role:
+                        type: string
+                        enum: [user, assistant, system]
+                      content:
+                        type: string
+                file_ids:
+                  type: array
+                  items:
+                    type: string
+                  example: ["550e8400-e29b-41d4-a716-446655440000"]
+                  description: Array of file IDs from previous uploads
+                model:
+                  type: string
+                  default: auto
+                  example: auto
+                temperature:
+                  type: number
+                  default: 0.7
+                stream:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Multimodal chat completion response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  object:
+                    type: string
+                    example: chat.completion
+                  model:
+                    type: string
+                  choices:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        message:
+                          type: object
+                          properties:
+                            role:
+                              type: string
+                              example: assistant
+                            content:
+                              type: string
+                  files_processed:
+                    type: integer
+                    example: 2
+                    description: Number of files processed in this request
+
+  /api/v1/transcribe/{file_id}:
+    post:
+      summary: Transcribe Audio File
+      description: |
+        Transcribe an uploaded audio file to text using Whisper ASR.
+        The file must be uploaded first using the /upload endpoint.
+      tags:
+        - Audio
+      parameters:
+        - name: file_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: 550e8400-e29b-41d4-a716-446655440000
+      responses:
+        '200':
+          description: Audio transcription successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  file_id:
+                    type: string
+                    example: 550e8400-e29b-41d4-a716-446655440000
+                  filename:
+                    type: string
+                    example: audio.mp3
+                  transcription:
+                    type: string
+                    example: Hello, this is a test audio message.
+                  language:
+                    type: string
+                    example: en
+                  duration:
+                    type: number
+                    example: 15.5
+                  type:
+                    type: string
+                    example: audio
+        '400':
+          description: File is not an audio file
+        '404':
+          description: Audio file not found
+        '500':
+          description: Transcription failed
+
+  /api/v1/analyze-complexity:
+    post:
+      summary: Analyze Request Complexity
+      description: |
+        Analyze the complexity of a request and show which model would be selected
+        by the smart routing system. Useful for understanding routing decisions.
+      tags:
+        - Analysis
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                messages:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      role:
+                        type: string
+                      content:
+                        type: string
+                file_ids:
+                  type: array
+                  items:
+                    type: string
+                model:
+                  type: string
+                  default: auto
+      responses:
+        '200':
+          description: Complexity analysis results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  complexity_analysis:
+                    type: object
+                    properties:
+                      complexity_score:
+                        type: number
+                        example: 45.5
+                      selected_model:
+                        type: string
+                        example: llama3.2:1b
+                      reasoning:
+                        type: object
+                        properties:
+                          total_message_length:
+                            type: integer
+                          file_count:
+                            type: integer
+                          file_types:
+                            type: array
+                            items:
+                              type: string
+                          complexity_factors:
+                            type: object
+
+  /api/v1/monitoring/health:
+    get:
+      summary: System Health Monitoring
+      description: Get detailed system health metrics including CPU, memory, and disk usage
+      tags:
+        - Monitoring
+      responses:
+        '200':
+          description: System health metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+                  system_metrics:
+                    type: object
+                    properties:
+                      cpu_percent:
+                        type: number
+                        example: 25.5
+                      memory_percent:
+                        type: number
+                        example: 60.2
+                      disk_usage_percent:
+                        type: number
+                        example: 45.8
+                  api_health:
+                    type: object
+                    properties:
+                      healthy_endpoints:
+                        type: integer
+                        example: 8
+                      total_endpoints:
+                        type: integer
+                        example: 10
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  /api/v1/performance/metrics:
+    get:
+      summary: Performance Metrics
+      description: Get detailed performance metrics and statistics
+      tags:
+        - Performance
+      responses:
+        '200':
+          description: Performance metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+                  performance_metrics:
+                    type: object
+                    properties:
+                      summary:
+                        type: object
+                      cache_stats:
+                        type: object
+                        properties:
+                          hits:
+                            type: integer
+                          misses:
+                            type: integer
+                          hit_rate_percent:
+                            type: number
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  /api/v1/performance/load-test:
+    post:
+      summary: Run Load Test
+      description: Execute a load test on a specific endpoint with configurable parameters
+      tags:
+        - Performance
+      parameters:
+        - name: endpoint
+          in: query
+          schema:
+            type: string
+            default: /health
+          example: /health
+        - name: concurrent_users
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 20
+            default: 5
+        - name: requests_per_user
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+      responses:
+        '200':
+          description: Load test results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: completed
+                  load_test_results:
+                    type: object
+                    properties:
+                      success_rate_percent:
+                        type: number
+                        example: 100.0
+                      avg_response_time_ms:
+                        type: number
+                        example: 25.5
+                      requests_per_second:
+                        type: number
+                        example: 15.2
+
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: Invalid request
+        detail:
+          type: string
+          example: The request body is malformed
+        status_code:
+          type: integer
+          example: 400
+
+    ChatMessage:
+      type: object
+      required:
+        - role
+        - content
+      properties:
+        role:
+          type: string
+          enum: [user, assistant, system]
+          example: user
+        content:
+          type: string
+          example: Hello, how can you help me today?
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for enhanced security (optional)
+
+tags:
+  - name: System
+    description: System health and status endpoints
+  - name: Models
+    description: AI model management
+  - name: Chat
+    description: Chat completion endpoints
+  - name: Files
+    description: File upload and management
+  - name: Audio
+    description: Audio processing and transcription
+  - name: Analysis
+    description: Request analysis and complexity scoring
+  - name: Monitoring
+    description: System monitoring and health checks
+  - name: Performance
+    description: Performance metrics and load testing
