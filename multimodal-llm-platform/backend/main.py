@@ -13,6 +13,7 @@ import logging
 from processors.file_processor import FileProcessor, FileProcessorError
 from services.search_service import SearchService, SearchResult
 from services.concurrent_processor import ConcurrentProcessor
+from token_manager import token_manager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -450,11 +451,31 @@ async def chat_with_file(file_id: str, request: ChatCompletionRequest):
                 detail="No text content could be extracted from the file"
             )
         
-        # Create a system message with file content
+        # Create a system message with file content using intelligent token management
         file_summary = file_processor.get_file_summary(result)
+        
+        # Get the model's token budget
+        model_name = request.model or "gpt-3.5-turbo"
+        token_budget = token_manager.create_token_budget(model_name)
+        
+        # Calculate how much text we can include (rough estimate: 4 chars per token)
+        # Reserve some tokens for the file summary and formatting
+        available_chars = (token_budget.file_content - 100) * 4
+        
+        # Use intelligent truncation if needed
+        if len(extracted_text) <= available_chars:
+            # File fits within budget - use full content
+            file_text = extracted_text
+            truncation_note = ""
+        else:
+            # Need to truncate - but now based on actual model capacity
+            file_text = extracted_text[:available_chars]
+            truncation_note = f"\n\n[Note: File content truncated from {len(extracted_text)} to {available_chars} characters to fit model context window]"
+            logger.info(f"Truncated file content from {len(extracted_text)} to {available_chars} chars for model {model_name}")
+        
         system_message = ChatMessage(
             role="system",
-            content=f"You are analyzing the following file: {file_summary}\n\nFile content:\n{extracted_text[:8000]}{'...' if len(extracted_text) > 8000 else ''}"
+            content=f"You are analyzing the following file: {file_summary}\n\nFile content:\n{file_text}{truncation_note}"
         )
         
         # Prepend system message to the conversation
