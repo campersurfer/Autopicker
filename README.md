@@ -103,12 +103,17 @@ python3 -m uvicorn main:app --host 0.0.0.0 --port 8001 --reload
 - **Ollama**: Llama 3.2, LLaVA (multimodal)
 - Self-hosted on VPS for cost efficiency
 
-## 🔄 Development Workflow
+## 🔄 Development Workflow (CI/CD Ready!)
 
-1. **Local Development**: Code and test on local machine
-2. **Version Control**: Push changes to GitHub
-3. **VPS Deployment**: Auto-deploy to VPS via scripts
-4. **Production Testing**: Validate on VPS environment
+1. **Local Development**: Code and test on Mac
+2. **Version Control**: Push changes to GitHub (`git push origin main`)
+3. **Automatic Deployment**: GitHub Actions deploys to VPS automatically
+4. **Production Testing**: Live at http://38.242.229.78
+5. **Health Check**: http://38.242.229.78/health
+
+### Manual Deployment Scripts
+- `./scripts/deploy_to_vps.sh` - Full deployment setup
+- `./scripts/update_vps.sh` - Quick updates only
 
 ## 📋 Development Progress
 
