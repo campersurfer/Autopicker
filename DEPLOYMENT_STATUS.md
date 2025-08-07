@@ -16,17 +16,25 @@ Every push to `main` branch will automatically:
 4. Perform health checks
 5. Verify deployment success
 
-## 🌐 Live URLs
+## 🌐 Live URLs ✅ WORKING
 
-- **Application**: http://38.242.229.78
-- **Health Check**: http://38.242.229.78/health
-- **API Documentation**: http://38.242.229.78/docs
+- **Application**: http://38.242.229.78:8001
+- **Health Check**: http://38.242.229.78:8001/health
+- **API Documentation**: http://38.242.229.78:8001/docs
+- **API ReDoc**: http://38.242.229.78:8001/redoc
+
+## 🧪 Test Endpoints
+- **Root**: http://38.242.229.78:8001/
+- **Ollama Test**: http://38.242.229.78:8001/test-ollama
+- **File Upload**: http://38.242.229.78:8001/api/v1/upload
+- **Chat Completions**: http://38.242.229.78:8001/api/v1/chat/completions
 
 ## 📊 Deployment Log
 
 - **2025-08-07**: Initial CI/CD setup completed
-- **2025-08-07**: GitHub secrets configured
-- **2025-08-07**: First automated deployment triggered
+- **2025-08-07**: GitHub secrets configured  
+- **2025-08-07**: Manual deployment successful - API LIVE! ✅
+- **Service Status**: Multimodal LLM Platform Simple API running on port 8001
 
 ## 🔄 Workflow
 
